@@ -8,104 +8,124 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
     <script src="/socket.io/socket.io.js"></script>
     <style>
-        .glass-panel { background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,0.08); }
-        body { background: radial-gradient(circle at 50% 0%, #111827, #030712); color: white; min-height: 100vh; }
-        .spacing-custom { letter-spacing: 0.3em; }
-        .chat-row { transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
-        .chat-row:hover { transform: translateX(4px); background: rgba(255, 255, 255, 0.07); border-color: rgba(6, 182, 212, 0.3); }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+        
+        body { 
+            font-family: 'Inter', sans-serif;
+            background: #f8fafc; /* Slate 50 */
+            background-image: radial-gradient(#e2e8f0 1px, transparent 1px);
+            background-size: 24px 24px;
+            color: #0f172a; /* Slate 900 */
+            min-height: 100vh; 
+        }
+        .glass-panel { 
+            background: rgba(255, 255, 255, 0.85); 
+            backdrop-filter: blur(16px); 
+            border: 1px solid rgba(255, 255, 255, 1); 
+            box-shadow: 0 10px 40px -10px rgba(0,0,0,0.05);
+        }
+        .spacing-custom { letter-spacing: 0.25em; }
+        .chat-row { transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+        .chat-row:hover { 
+            transform: translateX(4px); 
+            background: #ffffff; 
+            border-color: #cbd5e1; 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.03);
+        }
+        /* Custom scrollbar for light theme */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
     </style>
 </head>
-<body class="p-4 md:p-8 font-sans">
+<body class="p-4 md:p-8">
 
     <div id="app" class="max-w-6xl mx-auto">
-        <!-- Header Dashboard -->
-        <header class="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 glass-panel p-6 rounded-3xl shadow-2xl gap-4" id="header">
+        <header class="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 glass-panel p-6 rounded-3xl gap-4" id="header">
             <div>
-                <h1 class="text-3xl font-black bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-600 tracking-tight">
+                <h1 class="text-3xl font-black bg-clip-text text-transparent bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 tracking-tight">
                     Baileys Automated v7
                 </h1>
-                <p id="status-text" class="text-gray-400 text-xs mt-1 font-mono">Inisialisasi handshake sistem...</p>
+                <p id="status-text" class="text-slate-500 text-xs mt-1 font-mono font-medium">Inisialisasi handshake sistem...</p>
             </div>
-            <div class="flex items-center gap-3 bg-slate-950/60 px-5 py-2.5 rounded-full border border-slate-800 shadow-inner">
-                <span class="text-xs font-bold text-gray-300 tracking-wider">GEMINI AI AUTOMATION</span>
-                <button id="ai-toggle" class="w-12 h-6 bg-emerald-500 rounded-full relative transition-all duration-300 focus:outline-none">
-                    <div class="w-5 h-5 bg-white rounded-full absolute top-0.5 left-6 transition-all duration-300 shadow-md" id="toggle-circle"></div>
+            <div class="flex items-center gap-3 bg-white px-5 py-2.5 rounded-full border border-slate-200 shadow-sm">
+                <span class="text-[11px] font-bold text-slate-600 tracking-wider">GEMINI AI AUTOMATION</span>
+                <button id="ai-toggle" class="w-12 h-6 bg-emerald-500 rounded-full relative transition-all duration-300 focus:outline-none ring-2 ring-emerald-500/20 shadow-inner">
+                    <div class="w-5 h-5 bg-white rounded-full absolute top-0.5 left-6 transition-all duration-300 shadow-sm" id="toggle-circle"></div>
                 </button>
             </div>
         </header>
 
-        <!-- Grid Konten Utama -->
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <!-- Panel Kiri: Autentikasi / Pairing -->
-            <div id="login-section" class="lg:col-span-1 glass-panel p-8 rounded-3xl flex flex-col justify-between min-h-[420px] shadow-2xl relative overflow-hidden">
+            <div id="login-section" class="lg:col-span-1 glass-panel p-8 rounded-3xl flex flex-col justify-between min-h-[420px] relative overflow-hidden">
                 <div>
-                    <h2 class="text-xl font-bold mb-1 flex items-center gap-2">
-                        <span class="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span> Tautkan Akun
+                    <h2 class="text-xl font-bold mb-1 flex items-center gap-2 text-slate-800">
+                        <span class="w-2.5 h-2.5 rounded-full bg-blue-500 animate-pulse shadow-[0_0_8px_rgba(59,130,246,0.6)]"></span> Tautkan Akun
                     </h2>
-                    <p class="text-xs text-gray-400 mb-6">Metode pairing code instan aman tanpa perlu scan QR code browser.</p>
+                    <p class="text-xs text-slate-500 mb-6">Metode pairing code instan aman tanpa perlu scan QR code browser.</p>
                     
                     <div id="input-container" class="space-y-4">
                         <div>
-                            <label class="block text-[10px] font-bold text-cyan-400 tracking-widest mb-2 uppercase">Nomor WhatsApp Pengendali</label>
+                            <label class="block text-[10px] font-bold text-blue-600 tracking-widest mb-2 uppercase">Nomor WhatsApp Pengendali</label>
                             <input type="text" id="phone-number" placeholder="Contoh: 62812345678" 
-                                class="w-full bg-slate-950/80 border border-slate-800 rounded-xl p-3.5 text-white placeholder-gray-700 focus:outline-none focus:border-cyan-500 transition-all font-mono text-sm shadow-inner">
+                                class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3.5 text-slate-800 placeholder-slate-400 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all font-mono text-sm">
                         </div>
-                        <button id="btn-request" class="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-600 hover:to-blue-700 text-slate-950 font-black p-3.5 rounded-xl shadow-lg transition-all text-sm tracking-wide">
+                        <button id="btn-request" class="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold p-3.5 rounded-xl shadow-lg shadow-blue-500/30 transition-all text-sm tracking-wide">
                             Generate Pairing Code
                         </button>
                     </div>
 
                     <div id="code-container" class="hidden mt-8 text-center">
-                        <p class="text-xs text-slate-400 mb-3">Masukkan 8 digit kode ini pada WhatsApp HP Anda:</p>
-                        <div id="display-code" class="text-3xl font-mono font-black bg-slate-950 border border-cyan-500/30 text-cyan-400 p-4 rounded-2xl spacing-custom shadow-2xl inline-block px-8">
+                        <p class="text-xs text-slate-500 mb-3 font-medium">Masukkan 8 digit kode ini pada WhatsApp HP Anda:</p>
+                        <div id="display-code" class="text-3xl font-mono font-black bg-blue-50 border border-blue-200 text-blue-700 p-4 rounded-2xl spacing-custom shadow-inner inline-block px-8">
                             --------
                         </div>
                     </div>
                 </div>
-                <div class="mt-6 border-t border-slate-800/80 pt-4 text-[10px] text-gray-500 leading-relaxed">
-                    Buka WhatsApp di HP Anda &gt; Perangkat Tertaut &gt; Tautkan Perangkat &gt; Pilih opsi tautkan dengan nomor telepon saja.
+                <div class="mt-6 border-t border-slate-200 pt-4 text-[11px] text-slate-500 leading-relaxed">
+                    Buka WhatsApp di HP Anda &gt; Perangkat Tertaut &gt; Tautkan Perangkat &gt; Pilih opsi <span class="font-semibold text-slate-700">tautkan dengan nomor telepon saja</span>.
                 </div>
             </div>
 
-            <!-- Panel Kanan: Live Log Activities Chat Stream -->
-            <div id="main-section" class="lg:col-span-2 glass-panel rounded-3xl p-6 opacity-20 pointer-events-none transition-all duration-500 shadow-2xl">
+            <div id="main-section" class="lg:col-span-2 glass-panel rounded-3xl p-6 opacity-20 pointer-events-none transition-all duration-500">
                 <div class="flex justify-between items-center mb-6">
-                    <h2 class="text-xl font-bold flex items-center gap-2">
-                        Aktivitas Pesan Masuk (Khusus Personal Chat) <span class="bg-cyan-500/10 text-cyan-400 text-[10px] font-bold px-2 py-0.5 rounded border border-cyan-500/20">LIVE</span>
+                    <h2 class="text-xl font-bold flex items-center gap-2 text-slate-800">
+                        Aktivitas Pesan Masuk <span class="bg-blue-100 text-blue-700 text-[10px] font-bold px-2.5 py-1 rounded-md border border-blue-200 shadow-sm">LIVE FEED</span>
                     </h2>
                 </div>
                 <div id="chat-list" class="space-y-3 max-h-[300px] overflow-y-auto pr-2">
-                    <p class="text-xs text-gray-500 italic p-4 text-center">Selesaikan proses penautan akun terlebih dahulu untuk membuka log streaming...</p>
+                    <p class="text-sm text-slate-400 italic p-6 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200">Selesaikan proses penautan akun terlebih dahulu untuk membuka log streaming...</p>
                 </div>
             </div>
         </div>
 
-        <!-- Panel Bawah: Riwayat Transaksi H2H Server -->
-        <div class="glass-panel p-6 rounded-3xl shadow-2xl mt-8 opacity-20 pointer-events-none transition-all duration-500" id="transactions-section">
-            <div class="flex justify-between items-center mb-4">
-                <h2 class="text-xl font-bold flex items-center gap-2">
-                    📊 Riwayat Transaksi Server & Kredensial Pengisian Akun
+        <div class="glass-panel p-6 rounded-3xl mt-8 opacity-20 pointer-events-none transition-all duration-500" id="transactions-section">
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+                <h2 class="text-xl font-bold flex items-center gap-2 text-slate-800">
+                    📊 Riwayat Transaksi Server & Kredensial
                 </h2>
-                <button id="btn-refresh-trx" class="bg-slate-950/60 hover:bg-slate-900 border border-slate-800 text-xs text-cyan-400 px-4 py-2 rounded-xl transition-all">
-                    🔄 Refresh Data
+                <button id="btn-refresh-trx" class="bg-white hover:bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-600 px-4 py-2.5 rounded-xl transition-all shadow-sm flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                    Refresh Data
                 </button>
             </div>
             
-            <div class="overflow-x-auto">
-                <table class="w-full text-left border-collapse">
+            <div class="overflow-x-auto rounded-xl border border-slate-200">
+                <table class="w-full text-left border-collapse bg-white">
                     <thead>
-                        <tr class="border-b border-slate-800 text-cyan-400 text-xs font-mono">
-                            <th class="p-3">ID ORDER</th>
-                            <th class="p-3">PRODUK / VARIAN</th>
-                            <th class="p-3">TOTAL</th>
-                            <th class="p-3">STATUS PESANAN</th>
-                            <th class="p-3">KREDENSIAL / AKUN</th>
-                            <th class="p-3">TANGGAL</th>
+                        <tr class="border-b border-slate-200 bg-slate-50 text-slate-600 text-[11px] font-bold uppercase tracking-wider">
+                            <th class="p-4">ID Order</th>
+                            <th class="p-4">Produk / Varian</th>
+                            <th class="p-4">Total Harga</th>
+                            <th class="p-4">Status Pesanan</th>
+                            <th class="p-4">Kredensial / Akun</th>
+                            <th class="p-4">Tanggal</th>
                         </tr>
                     </thead>
-                    <tbody id="transaction-list" class="text-xs text-gray-300 divide-y divide-slate-900">
+                    <tbody id="transaction-list" class="text-sm text-slate-700 divide-y divide-slate-100">
                         <tr>
-                            <td colspan="6" class="p-4 text-center italic text-gray-600">Menunggu sinkronisasi akun...</td>
+                            <td colspan="6" class="p-8 text-center italic text-slate-400">Menunggu sinkronisasi akun...</td>
                         </tr>
                     </tbody>
                 </table>
@@ -117,9 +137,9 @@
         const socket = io();
         let aiActive = true;
 
-        gsap.from("#header", { y: -50, opacity: 0, duration: 0.8, ease: "power3.out" });
-        gsap.from("#login-section", { x: -40, opacity: 0, duration: 0.8, delay: 0.2 });
-        gsap.from("#main-section", { x: 40, opacity: 0, duration: 0.8, delay: 0.4 });
+        gsap.from("#header", { y: -30, opacity: 0, duration: 0.8, ease: "power3.out" });
+        gsap.from("#login-section", { x: -30, opacity: 0, duration: 0.8, delay: 0.2, ease: "power3.out" });
+        gsap.from("#main-section", { x: 30, opacity: 0, duration: 0.8, delay: 0.3, ease: "power3.out" });
 
         const btnRequest = document.getElementById('btn-request');
         const phoneNumberInput = document.getElementById('phone-number');
@@ -133,18 +153,22 @@
             socket.emit('request-pairing', num);
             btnRequest.innerText = "Mengamankan Enkripsi...";
             btnRequest.disabled = true;
+            btnRequest.classList.add('opacity-80', 'cursor-not-allowed');
         });
 
         btnRefreshTrx.addEventListener('click', () => {
+            const icon = btnRefreshTrx.querySelector('svg');
+            gsap.to(icon, { rotation: "+=360", duration: 0.5, ease: "none" });
             socket.emit('refresh-transactions');
         });
 
         socket.on('pairing-code', (code) => {
             btnRequest.innerText = "Generate Pairing Code";
             btnRequest.disabled = false;
+            btnRequest.classList.remove('opacity-80', 'cursor-not-allowed');
             codeContainer.classList.remove('hidden');
             displayCode.innerText = code;
-            gsap.from("#code-container", { scale: 0.9, opacity: 0, duration: 0.5, ease: "back.out(1.5)" });
+            gsap.from("#code-container", { scale: 0.95, opacity: 0, duration: 0.5, ease: "back.out(1.5)" });
         });
 
         const aiBtn = document.getElementById('ai-toggle');
@@ -152,10 +176,10 @@
         aiBtn.addEventListener('click', () => {
             aiActive = !aiActive;
             if(aiActive) {
-                aiBtn.className = "w-12 h-6 bg-emerald-500 rounded-full relative transition-all duration-300 focus:outline-none";
+                aiBtn.className = "w-12 h-6 bg-emerald-500 rounded-full relative transition-all duration-300 focus:outline-none ring-2 ring-emerald-500/20 shadow-inner";
                 toggleCircle.style.left = "24px";
             } else {
-                aiBtn.className = "w-12 h-6 bg-slate-700 rounded-full relative transition-all duration-300 focus:outline-none";
+                aiBtn.className = "w-12 h-6 bg-slate-300 rounded-full relative transition-all duration-300 focus:outline-none shadow-inner";
                 toggleCircle.style.left = "2px";
             }
             socket.emit('toggle-ai', aiActive);
@@ -168,40 +192,40 @@
         socket.on('store-name', (name) => {
             document.getElementById('login-section').innerHTML = `
                 <div class="text-center my-auto py-12 flex flex-col items-center justify-center h-full">
-                    <div class="w-16 h-16 bg-cyan-500/10 rounded-full flex items-center justify-center border border-cyan-500/20 mb-4 shadow-xl" id="success-glow">
-                        <svg class="w-8 h-8 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"></path></svg>
+                    <div class="w-20 h-20 bg-emerald-50 rounded-full flex items-center justify-center border-4 border-white mb-5 shadow-lg shadow-emerald-500/20" id="success-glow">
+                        <svg class="w-10 h-10 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"></path></svg>
                     </div>
-                    <h3 class="text-lg font-black text-white truncate max-w-full px-2">${name}</h3>
-                    <span class="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded mt-1 uppercase tracking-wider">Active Bot</span>
-                    <p class="text-gray-400 text-xs mt-4 text-center px-4 leading-relaxed">Modul sistem *${name} AI Assistant* terhubung penuh memproses data transaksi PPOB otomatis.</p>
+                    <h3 class="text-xl font-bold text-slate-800 truncate max-w-full px-2">${name}</h3>
+                    <span class="text-[10px] text-emerald-700 font-bold bg-emerald-100 border border-emerald-200 px-2.5 py-1 rounded-md mt-2 uppercase tracking-wider">Bot Connected</span>
+                    <p class="text-slate-500 text-sm mt-4 text-center px-4 leading-relaxed">Modul sistem AI Assistant telah terhubung penuh memproses data transaksi PPOB secara otomatis.</p>
                 </div>
             `;
             document.getElementById('main-section').classList.remove('opacity-20', 'pointer-events-none');
             document.getElementById('transactions-section').classList.remove('opacity-20', 'pointer-events-none');
-            gsap.from("#success-glow", { scale: 0, duration: 0.6, ease: "back.out" });
+            gsap.from("#success-glow", { scale: 0, duration: 0.6, ease: "back.out(1.5)" });
         });
 
         socket.on('chats-data', (chats) => {
             const list = document.getElementById('chat-list');
             list.innerHTML = '';
             if(chats.length === 0) {
-                list.innerHTML = '<p class="text-xs text-gray-500 italic text-center p-8">Belum ada obrolan personal masuk...</p>';
+                list.innerHTML = '<p class="text-sm text-slate-400 italic text-center p-8 bg-slate-50 rounded-xl border border-dashed border-slate-200">Belum ada obrolan personal masuk...</p>';
                 return;
             }
             chats.forEach((chat) => {
                 const div = document.createElement('div');
-                div.className = "chat-row p-4 rounded-2xl glass-panel flex items-center justify-between border border-slate-800/40 hover:bg-white/5";
+                div.className = "chat-row p-4 rounded-2xl bg-white border border-slate-200 flex items-center justify-between";
                 div.innerHTML = `
                     <div class="flex items-center gap-4 overflow-hidden">
-                        <div class="w-10 h-10 bg-slate-950 border border-slate-800 rounded-full flex items-center justify-center font-black text-cyan-400 uppercase text-xs flex-shrink-0">
+                        <div class="w-10 h-10 bg-blue-50 border border-blue-100 rounded-full flex items-center justify-center font-bold text-blue-600 uppercase text-sm flex-shrink-0 shadow-sm">
                             ${chat.name ? chat.name[0] : 'K'}
                         </div>
                         <div class="overflow-hidden">
-                            <p class="font-bold text-sm text-gray-200 truncate">${chat.name}</p>
-                            <p class="text-xs text-slate-400 truncate mt-0.5 font-mono">${chat.lastMessage}</p>
+                            <p class="font-bold text-sm text-slate-800 truncate">${chat.name}</p>
+                            <p class="text-xs text-slate-500 truncate mt-0.5">${chat.lastMessage}</p>
                         </div>
                     </div>
-                    <div class="text-right flex-shrink-0 ml-4 font-mono text-[10px] text-slate-500"><span>${chat.timestamp}</span></div>
+                    <div class="text-right flex-shrink-0 ml-4 font-mono text-[10px] font-medium text-slate-400"><span>${chat.timestamp}</span></div>
                 `;
                 list.appendChild(div);
             });
@@ -212,14 +236,14 @@
             tbody.innerHTML = '';
 
             if(transactions.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" class="p-4 text-center text-gray-500">Belum ada riwayat transaksi ditemukan.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" class="p-8 text-center text-slate-400 italic">Belum ada riwayat transaksi ditemukan.</td></tr>';
                 return;
             }
 
             transactions.forEach((trx) => {
                 let prodInfo = '';
                 trx.products.forEach(p => {
-                    prodInfo += `<p class="font-bold text-white">${p.product_name}</p><p class="text-[10px] text-gray-400">${p.variant_name} (${p.duration})</p>`;
+                    prodInfo += `<p class="font-bold text-slate-800">${p.product_name}</p><p class="text-xs text-slate-500 mt-0.5">${p.variant_name} (${p.duration})</p>`;
                 });
 
                 let credInfo = '';
@@ -227,25 +251,25 @@
                     trx.account_details.forEach(acc => {
                         acc.details.forEach(det => {
                             det.credentials.forEach(c => {
-                                credInfo += `<div class="bg-slate-950/80 p-1 px-2 rounded border border-slate-900 mt-1"><span class="text-gray-500">${c.label}:</span> <span class="font-mono text-cyan-400 font-bold">${c.value}</span></div>`;
+                                credInfo += `<div class="bg-slate-50 p-2 rounded-lg border border-slate-200 mt-1.5 shadow-sm text-xs"><span class="text-slate-500">${c.label}:</span> <span class="font-mono text-blue-600 font-bold ml-1">${c.value}</span></div>`;
                             });
                         });
                     });
-                } else { credInfo = '<span class="text-gray-600 italic">Tidak ada kredensial</span>'; }
+                } else { credInfo = '<span class="text-slate-400 italic text-xs">Tidak ada kredensial</span>'; }
 
                 const badgeStatus = trx.status === 'completed' 
-                    ? '<span class="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded text-[10px] font-bold">COMPLETED</span>' 
-                    : '<span class="bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-0.5 rounded text-[10px] font-bold">PROCESSING</span>';
+                    ? '<span class="bg-emerald-100 text-emerald-700 border border-emerald-200 px-2.5 py-1 rounded-md text-[10px] font-bold tracking-wide">COMPLETED</span>' 
+                    : '<span class="bg-amber-100 text-amber-700 border border-amber-200 px-2.5 py-1 rounded-md text-[10px] font-bold tracking-wide">PROCESSING</span>';
 
                 const tr = document.createElement('tr');
-                tr.className = "hover:bg-white/5 transition-all";
+                tr.className = "hover:bg-slate-50 transition-colors";
                 tr.innerHTML = `
-                    <td class="p-3 font-mono font-bold text-gray-400">${trx.order_id}</td>
-                    <td class="p-3">${prodInfo}</td>
-                    <td class="p-3 font-mono text-white">Rp ${trx.total_amount}</td>
-                    <td class="p-3">${badgeStatus}</td>
-                    <td class="p-3">${credInfo}</td>
-                    <td class="p-3 text-gray-500 font-mono">${trx.created_at}</td>
+                    <td class="p-4 font-mono text-sm font-semibold text-slate-500">${trx.order_id}</td>
+                    <td class="p-4">${prodInfo}</td>
+                    <td class="p-4 font-mono font-bold text-slate-800">Rp ${trx.total_amount}</td>
+                    <td class="p-4">${badgeStatus}</td>
+                    <td class="p-4">${credInfo}</td>
+                    <td class="p-4 text-slate-500 text-xs">${trx.created_at}</td>
                 `;
                 tbody.appendChild(tr);
             });
