@@ -8,7 +8,8 @@ import axios from 'axios';
 import makeWASocket, { 
     useMultiFileAuthState, 
     DisconnectReason, 
-    fetchLatestBaileysVersion 
+    fetchLatestBaileysVersion,
+    delay // Tambahkan delay dari baileys
 } from 'baileys';
 
 const app = express();
@@ -23,7 +24,7 @@ app.use(express.static('public'));
 
 let sock = null;
 let isAiActive = true;
-let storeName = "Pansa Digital Store"; 
+let storeName = "Pansa Group"; // Sesuai dengan instruksi branding Anda
 const recentChats = []; 
 
 const { state, saveCreds } = await useMultiFileAuthState('baileys_auth_store');
@@ -31,7 +32,6 @@ const { version } = await fetchLatestBaileysVersion();
 
 const PREMIFY_BASE_URL = 'https://premify.store/api/v1';
 const PREMIFY_HEADERS = {
-    'Authorization': `Bearer ${process.env.PREMIFY_API_KEY}`,
     'Content-Type': 'application/json'
 };
 
@@ -43,7 +43,10 @@ const PRICE_MARKUP = parseInt(process.env.MARKUP_UNTUNG) || 2000;
 
 async function checkPremifyBalance() {
     try {
-        const response = await axios.get(`${PREMIFY_BASE_URL}/balance`, { headers: PREMIFY_HEADERS });
+        const response = await axios.post(`${PREMIFY_BASE_URL}/balance`, {
+            api_key: process.env.PREMIFY_API_KEY
+        }, { headers: PREMIFY_HEADERS });
+        
         if (response.data && response.data.success === true) {
             const rawBalance = response.data.data.balance;
             const currency = response.data.data.currency || "IDR";
@@ -51,12 +54,18 @@ async function checkPremifyBalance() {
             return `💻 *SALDO SERVER API MODAL*\n\n• Sisa Saldo: *${formattedBalance}*\n• Status: Terhubung Sempurna ✅`;
         }
         return "⚠️ Gagal mengambil data saldo server.";
-    } catch (error) { return "❌ Gagal mengontak server pusat Premify."; }
+    } catch (error) { 
+        console.error("Premify Balance Error:", error?.response?.data || error.message);
+        return "❌ Gagal mengontak server pusat Premify."; 
+    }
 }
 
 async function fetchPremifyProducts(searchKeyword = '') {
     try {
-        const response = await axios.post(`${PREMIFY_BASE_URL}/products`, {}, { headers: PREMIFY_HEADERS });
+        const response = await axios.post(`${PREMIFY_BASE_URL}/products`, {
+            api_key: process.env.PREMIFY_API_KEY
+        }, { headers: PREMIFY_HEADERS });
+        
         if (response.data && response.data.success === true) {
             const products = response.data.data || [];
             const flattenedVariants = [];
@@ -82,7 +91,10 @@ async function fetchPremifyProducts(searchKeyword = '') {
             return flattenedVariants.slice(0, 15);
         }
         return { error: "Gagal memuat produk." };
-    } catch (error) { return { error: "Gangguan jaringan produk." }; }
+    } catch (error) { 
+        console.error("Premify Products Error:", error?.response?.data || error.message);
+        return { error: "Gangguan jaringan produk." }; 
+    }
 }
 
 async function createPakasirInvoice(variantId, productName, variantName, finalPrice, customerWhatsapp) {
@@ -119,22 +131,37 @@ async function createPakasirInvoice(variantId, productName, variantName, finalPr
 
 async function createPremifyOrder(variantId, targetInput) {
     try {
-        const payload = { variant_id: variantId, quantity: 1 };
+        const payload = { 
+            api_key: process.env.PREMIFY_API_KEY,
+            variant_id: variantId, 
+            quantity: 1 
+        };
+        
         if (targetInput && targetInput.includes('@')) payload.email_invite = targetInput.trim();
         
         const response = await axios.post(`${PREMIFY_BASE_URL}/order`, payload, { headers: PREMIFY_HEADERS });
+        
         if (response.data && response.data.success === true) {
             return { sukses: true, order_id: response.data.data.order_id, status: response.data.data.status };
         }
         return { sukses: false, pesan: response.data.message };
-    } catch (error) { return { sukses: false, pesan: "Gangguan saat checkout h2h ke supplier pusat." }; }
+    } catch (error) { 
+        console.error("Premify Order Error:", error?.response?.data || error.message);
+        return { sukses: false, pesan: "Gangguan saat checkout h2h ke supplier pusat." }; 
+    }
 }
 
 async function fetchPremifyTransactions() {
     try {
-        const response = await axios.post(`${PREMIFY_BASE_URL}/transactions`, {}, { headers: PREMIFY_HEADERS });
+        const response = await axios.post(`${PREMIFY_BASE_URL}/transactions`, {
+            api_key: process.env.PREMIFY_API_KEY
+        }, { headers: PREMIFY_HEADERS });
+        
         return response.data && response.data.success === true ? response.data.data : [];
-    } catch (error) { return []; }
+    } catch (error) { 
+        console.error("Premify Transactions Error:", error?.response?.data || error.message);
+        return []; 
+    }
 }
 
 // ========================================================
@@ -172,7 +199,7 @@ async function getGeminiResponse(userMessage, senderName, currentStoreName, send
             contents: userMessage,
             config: {
                 tools: tools,
-                systemInstruction: `Kamu adalah "${currentStoreName} Bot", asisten virtual super ramah dari toko produk digital ${currentStoreName}. Berbicaralah dengan bahasa Indonesia yang santai, modern, gunakan sebutan 'Kak ${senderName}' dan emoji relevan. Selalu gunakan tools fetchPremifyProducts untuk cek harga asli produk toko. Jika pelanggan sudah setuju dengan varian harga dan memberikan email/nomor target, panggil tool createPakasirInvoice untuk memberikan mereka link pembayaran QRIS/VA Pakasir.`,
+                systemInstruction: `Kamu adalah "${currentStoreName} WhatsApp OTP", asisten virtual super ramah dari toko produk digital ${currentStoreName}. Berbicaralah dengan bahasa Indonesia yang santai, modern, gunakan sebutan 'Kak ${senderName}' dan emoji relevan. Selalu gunakan tools fetchPremifyProducts untuk cek harga asli produk toko. Jika pelanggan sudah setuju dengan varian harga dan memberikan email/nomor target, panggil tool createPakasirInvoice untuk memberikan mereka link pembayaran QRIS/VA Pakasir.`,
                 temperature: 0.5
             }
         });
@@ -279,11 +306,10 @@ app.post('/webhook/premify', async (req, res) => {
 // ========================================================
 
 function initBaileysV7() {
-    // Perbaikan: Hapus .default pada makeWASocket
     sock = makeWASocket({
         version,
         auth: state,
-        printQRInTerminal: true, // Set true sementara agar bisa scan QR di terminal jika belum connect
+        printQRInTerminal: true, 
         logger: pino({ level: 'silent' }), 
         browser: ["Ubuntu", "Chrome", "20.0.04"],
         syncFullHistory: false,            
@@ -302,7 +328,6 @@ function initBaileysV7() {
             io.emit('ready', false);
             if (shouldReconnect) initBaileysV7(); 
         } else if (connection === 'open') {
-            storeName = sock.user.name || "Premify H2H Store";
             io.emit('status', `Terhubung sebagai: ${storeName} ✅`);
             io.emit('ready', true);
             io.emit('store-name', storeName);
@@ -341,7 +366,19 @@ function initBaileysV7() {
                     io.emit('chats-data', recentChats);
 
                     if (isAiActive) {
+                        // 1. Kirim status "Sedang mengetik..." (composing)
+                        await sock.sendPresenceUpdate('composing', senderJid);
+                        
+                        // Menunggu respons dari Gemini AI (selama ini bot terlihat "mengetik")
                         const aiReply = await getGeminiResponse(bodyMessage, senderName, storeName, cleanSenderNumber);
+                        
+                        // Jeda sedikit agar animasinya terasa natural (opsional, misalnya 500ms)
+                        await delay(500); 
+                        
+                        // 2. Berhenti "mengetik" (paused)
+                        await sock.sendPresenceUpdate('paused', senderJid);
+                        
+                        // 3. Kirim pesan sesungguhnya
                         await sock.sendMessage(senderJid, { text: aiReply }, { quoted: msg });
                     }
                 }
