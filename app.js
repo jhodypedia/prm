@@ -12,7 +12,7 @@ import makeWASocket, {
 } from 'baileys';
 
 const app = express();
-app.use(express.json()); // Middleware wajib untuk menangani JSON Webhook Pakasir & Premify
+app.use(express.json()); // Middleware wajib untuk menangani JSON Webhook
 
 const server = http.createServer(app);
 const io = new Server(server);
@@ -87,28 +87,33 @@ async function fetchPremifyProducts(searchKeyword = '') {
 
 async function createPakasirInvoice(variantId, productName, variantName, finalPrice, customerWhatsapp) {
     try {
-        const referenceId = `INV-${Date.now()}`;
-        const response = await axios.post('https://api.pakasir.com/v1/invoice', {
+        // TRIK: Sisipkan variantId dan nomor WA ke dalam order_id karena Pakasir tidak support metadata object
+        // Format: INV-timestamp-variantId-customerWhatsapp
+        const orderId = `INV-${Date.now()}-${variantId}-${customerWhatsapp}`;
+        
+        const response = await axios.post('https://app.pakasir.com/api/transactioncreate/qris', {
+            project: process.env.PAKASIR_PROJECT_SLUG,
+            order_id: orderId,
             amount: finalPrice,
-            reference_id: referenceId,
-            description: `Pembelian ${productName} - ${variantName}`,
-            customer_phone: customerWhatsapp,
-            metadata: { 
-                variant_id: variantId,
-                customer_whatsapp: customerWhatsapp,
-                product_title: `${productName} (${variantName})`
-            }
-        }, { headers: { 'Authorization': `Bearer ${process.env.PAKASIR_API_KEY}`, 'Content-Type': 'application/json' } });
+            api_key: process.env.PAKASIR_API_KEY
+        }, { 
+            headers: { 'Content-Type': 'application/json' } 
+        });
 
-        return {
-            sukses: true,
-            invoice_url: response.data.data.invoice_url || response.data.invoice_url,
-            reference_id: referenceId,
-            price: finalPrice
-        };
+        if (response.data && response.data.payment) {
+            return {
+                sukses: true,
+                // Menggunakan URL Simple Integration Pakasir agar user mendapatkan halaman pembayaran yang rapi
+                invoice_url: `https://app.pakasir.com/pay/${process.env.PAKASIR_PROJECT_SLUG}/${finalPrice}?order_id=${orderId}&qris_only=1`,
+                reference_id: orderId,
+                price: finalPrice
+            };
+        } else {
+            return { sukses: false, pesan: "Gagal memproses QRIS Pakasir." };
+        }
     } catch (error) {
-        console.error("Pakasir API Error:", error.message);
-        return { sukses: false, pesan: "Gagal membuat billing pembayaran ke Pakasir." };
+        console.error("Pakasir API Error:", error?.response?.data || error.message);
+        return { sukses: false, pesan: "Gagal membuat tagihan pembayaran ke Pakasir." };
     }
 }
 
@@ -195,7 +200,10 @@ async function getGeminiResponse(userMessage, senderName, currentStoreName, send
             return secondResponse.text;
         }
         return response.text;
-    } catch (error) { return `Maaf ya Kak, jaringan otak pintar toko sedang padat, boleh ketik ulang produk yang Kakak cari? 😊`; }
+    } catch (error) { 
+        console.error("Gemini Error:", error);
+        return `Maaf ya Kak, jaringan otak pintar toko sedang padat, boleh ketik ulang produk yang Kakak cari? 😊`; 
+    }
 }
 
 // ========================================================
@@ -204,29 +212,43 @@ async function getGeminiResponse(userMessage, senderName, currentStoreName, send
 
 app.post('/webhook/pakasir', async (req, res) => {
     try {
-        const { event, data } = req.body;
-        if (event === 'invoice.paid' || data.status === 'paid') {
-            const variantId = data.metadata.variant_id;
-            const targetWhatsapp = data.metadata.customer_whatsapp;
-            const productTitle = data.metadata.product_title;
+        const payload = req.body;
+        
+        // Cek apakah status pembayaran "completed"
+        if (payload.status === 'completed') {
+            const orderId = payload.order_id; 
+            
+            // Ekstrak data (Format: INV-timestamp-variantId-customerWhatsapp)
+            const orderParts = orderId.split('-');
+            if (orderParts.length >= 4) {
+                const variantId = orderParts[2];
+                const targetWhatsapp = orderParts.slice(3).join('-'); 
 
-            console.log(`[💸 PAYMENT SUCCESS] Nomor ${targetWhatsapp} Lunas membayar ${productTitle}. Memotong saldo modal h2h...`);
+                console.log(`[💸 PAYMENT SUCCESS] Nomor ${targetWhatsapp} Lunas membayar (Order: ${orderId}). Memotong saldo modal h2h...`);
 
-            // DISINI KITA HIT PROVIDER PREMIFY KARENA UANG CUSTOMER SUDAH MASUK KE PAKASIR ANDA
-            const premifyResult = await createPremifyOrder(variantId, targetWhatsapp);
+                // HIT PROVIDER PREMIFY
+                const premifyResult = await createPremifyOrder(variantId, targetWhatsapp);
 
-            if (premifyResult.sukses) {
-                await sock.sendMessage(`${targetWhatsapp}@s.whatsapp.net`, { 
-                    text: `💳 *Pembayaran Terverifikasi Lunas!* 🎉\n\nDana sebesar *Rp ${data.amount.toLocaleString('id-ID')}* untuk produk *${productTitle}* telah kami terima. Sistem kami saat ini sedang memproses pembuatan akun premium Kakak ke server pusat h2h. Mohon ditunggu sebentar ya Kak! ✨` 
-                });
-            } else {
-                await sock.sendMessage(`${targetWhatsapp}@s.whatsapp.net`, { 
-                    text: `⚠️ *Antrean Pengisian Sistem*\n\nHalo Kak, pembayaran Kakak sudah masuk, namun antrean server supplier kami sedang sangat padat. Pesanan Kakak akan di-proses secara manual oleh Owner secepatnya ya Kak. Terima kasih! 🙏` 
-                });
+                if (premifyResult.sukses) {
+                    if (sock && sock.user) {
+                        await sock.sendMessage(`${targetWhatsapp}@s.whatsapp.net`, { 
+                            text: `💳 *Pembayaran Terverifikasi Lunas!* 🎉\n\nDana sebesar *Rp ${payload.amount.toLocaleString('id-ID')}* telah kami terima. Sistem kami saat ini sedang memproses pesanan Kakak ke server pusat. Mohon ditunggu sebentar ya Kak! ✨` 
+                        });
+                    }
+                } else {
+                    if (sock && sock.user) {
+                        await sock.sendMessage(`${targetWhatsapp}@s.whatsapp.net`, { 
+                            text: `⚠️ *Antrean Pengisian Sistem*\n\nHalo Kak, pembayaran Kakak sudah masuk, namun antrean server supplier kami sedang sangat padat. Pesanan Kakak akan di-proses secara manual oleh Owner secepatnya ya Kak. Terima kasih! 🙏` 
+                        });
+                    }
+                }
             }
         }
         return res.status(200).json({ success: true });
-    } catch (error) { return res.status(200).send('OK'); }
+    } catch (error) { 
+        console.error("Pakasir Webhook Error:", error);
+        return res.status(200).send('OK'); 
+    }
 });
 
 app.post('/webhook/premify', async (req, res) => {
@@ -246,7 +268,10 @@ app.post('/webhook/premify', async (req, res) => {
             if (sock && sock.user) await sock.sendMessage(customerJid, { text: textReady });
         }
         return res.status(200).json({ success: true });
-    } catch (error) { return res.status(200).send('OK'); }
+    } catch (error) { 
+        console.error("Premify Webhook Error:", error);
+        return res.status(200).send('OK'); 
+    }
 });
 
 // ========================================================
@@ -254,10 +279,11 @@ app.post('/webhook/premify', async (req, res) => {
 // ========================================================
 
 function initBaileysV7() {
-    sock = makeWASocket.default({
+    // Perbaikan: Hapus .default pada makeWASocket
+    sock = makeWASocket({
         version,
         auth: state,
-        printQRInTerminal: false,
+        printQRInTerminal: true, // Set true sementara agar bisa scan QR di terminal jika belum connect
         logger: pino({ level: 'silent' }), 
         browser: ["Ubuntu", "Chrome", "20.0.04"],
         syncFullHistory: false,            
@@ -309,6 +335,9 @@ function initBaileysV7() {
                     }
 
                     recentChats.push({ jid: senderJid, name: senderName, lastMessage: `💬 ${bodyMessage}`, timestamp: new Date().toLocaleTimeString() });
+                    // Batasi array chat agar tidak memakan memori berlebih
+                    if(recentChats.length > 50) recentChats.shift();
+                    
                     io.emit('chats-data', recentChats);
 
                     if (isAiActive) {
@@ -331,8 +360,12 @@ io.on('connection', (socket) => {
         fetchPremifyTransactions().then(trx => socket.emit('transactions-data', trx));
     }
     socket.on('request-pairing', async (phoneNumber) => {
-        const code = await sock.requestPairingCode(phoneNumber.replace(/[^0-9]/g, ''));
-        socket.emit('pairing-code', code);
+        try {
+            const code = await sock.requestPairingCode(phoneNumber.replace(/[^0-9]/g, ''));
+            socket.emit('pairing-code', code);
+        } catch (error) {
+            console.error('Gagal generate pairing code:', error);
+        }
     });
     socket.on('toggle-ai', (status) => { isAiActive = status; });
     socket.on('refresh-transactions', async () => {
@@ -342,5 +375,10 @@ io.on('connection', (socket) => {
 });
 
 initBaileysV7();
+
 app.get('/', (req, res) => { res.render('index'); });
-server.listen(process.env.PORT || 3000);
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`Server berjalan di port ${PORT}`);
+});
