@@ -31,10 +31,9 @@ let storeName = "Pansa Group";
 const recentChats = []; 
 
 // 🔴 SAKELAR MODE TEST (SANDBOX) 🔴
-// Ubah menjadi 'false' jika kamu sudah siap rilis dan ingin memotong saldo asli
 const IS_TEST_MODE = true; 
 
-// Cache untuk Anti-Spam (Mencegah Bot membalas 2x untuk pesan yang sama)
+// Cache untuk Anti-Spam (Mencegah Bot membalas 2x)
 const processedMessages = new Set();
 
 const { state, saveCreds } = await useMultiFileAuthState('baileys_auth_store');
@@ -84,7 +83,18 @@ async function fetchPremifyProducts(searchKeyword = '') {
             const flattenedVariants = [];
             
             products.forEach(product => {
-                if (searchKeyword && !product.name.toLowerCase().includes(searchKeyword.toLowerCase())) return;
+                const prodNameLower = product.name.toLowerCase();
+                const searchLower = searchKeyword.toLowerCase().trim();
+                const firstWord = searchLower.split(' ')[0]; // Ambil kata pertama saja (misal: "netflix")
+
+                // ALGORITMA PENCARIAN CERDAS (TOLERAN/FUZZY SEARCH)
+                const isMatch = !searchKeyword || 
+                                prodNameLower.includes(searchLower) || 
+                                searchLower.includes(prodNameLower) || 
+                                (firstWord && prodNameLower.includes(firstWord));
+
+                if (!isMatch) return;
+
                 if (product.variants) {
                     product.variants.forEach(v => {
                         const hargaJualCustomer = v.price + PRICE_MARKUP;
@@ -120,14 +130,12 @@ async function createPakasirInvoice(variantId, productName, variantName, finalPr
     try {
         const orderId = `INV-${Date.now()}-${variantId}-${customerWhatsapp}`;
         
-        // Catatan: Jika ingin test mode di Pakasir, pastikan PAKASIR_PROJECT_SLUG dan 
-        // PAKASIR_API_KEY di .env adalah milik "Proyek Sandbox" yang kamu buat di dashboard Pakasir.
         const response = await axios.post('https://app.pakasir.com/api/transactioncreate/qris', {
             project: process.env.PAKASIR_PROJECT_SLUG,
             order_id: orderId,
             amount: finalPrice,
             api_key: process.env.PAKASIR_API_KEY,
-            is_test: IS_TEST_MODE // Opsional jika Pakasir mendukung flag ini
+            is_test: IS_TEST_MODE 
         }, { headers: { 'Content-Type': 'application/json' } });
 
         if (response.data && response.data.payment) {
@@ -150,7 +158,7 @@ async function createPremifyOrder(variantId, targetInput) {
             api_key: process.env.PREMIFY_API_KEY,
             variant_id: variantId, 
             quantity: 1,
-            is_test: IS_TEST_MODE // MENGAKTIFKAN MODE TEST PREMIFY
+            is_test: IS_TEST_MODE 
         };
         
         if (targetInput && targetInput.includes('@')) payload.email_invite = targetInput.trim();
@@ -187,21 +195,24 @@ async function getGeminiResponse(userMessage, senderName, currentStoreName, send
             functionDeclarations: [
                 {
                     name: 'fetchPremifyProducts',
-                    description: 'Cari katalog produk digital, harga, dan stok dari database. HANYA gunakan jika pelanggan secara eksplisit menanyakan produk atau harga.',
+                    description: 'Cari katalog produk digital, harga, dan stok dari database. HANYA gunakan jika pelanggan menanyakan ketersediaan produk atau harga.',
                     parameters: { 
                         type: Type.OBJECT, 
                         properties: { 
-                            searchKeyword: { type: Type.STRING, description: 'Kata kunci produk yang dicari' } 
+                            searchKeyword: { 
+                                type: Type.STRING, 
+                                description: 'Wajib 1 kata utama saja (contoh: "netflix", "canva", "spotify"). Jangan masukkan detail durasi atau tipe varian.' 
+                            } 
                         } 
                     }
                 },
                 {
                     name: 'createPakasirInvoice',
-                    description: 'Buat link tagihan pembayaran QRIS ketika pelanggan sudah setuju/DEAL ingin membeli.',
+                    description: 'Buat link tagihan QRIS ketika pelanggan FIX SETUJU ingin membeli produk tertentu.',
                     parameters: { 
                         type: Type.OBJECT, 
                         properties: { 
-                            variantId: { type: Type.STRING },
+                            variantId: { type: Type.STRING, description: 'ID varian dari produk yang dipilih pelanggan (didapat dari fetchPremifyProducts)' },
                             productName: { type: Type.STRING },
                             variantName: { type: Type.STRING },
                             finalPrice: { type: Type.NUMBER }
@@ -212,14 +223,14 @@ async function getGeminiResponse(userMessage, senderName, currentStoreName, send
             ]
         }];
 
-        const systemPrompt = `Kamu adalah Customer Service dari "${currentStoreName}". 
-Karaktermu: Ramah, asik, sopan. Gunakan bahasa Indonesia sehari-hari yang luwes (pakai aku/kamu atau kami/kakak, sapa pelanggan dengan 'Kak ${senderName}').
+        const systemPrompt = `Kamu adalah Customer Service handal dari "${currentStoreName}". 
+Sifatmu ramah, asik, dan to the point. Gunakan bahasa Indonesia luwes (aku/kamu). Sapa pelanggan 'Kak ${senderName}'.
 
 ATURAN KERAS:
-1. Kamu BUKAN robot atau AI.
-2. Jika pelanggan hanya menyapa (contoh: "Hai", "Halo", "P", "Ping"), balaslah sapaannya dengan ramah dan tanyakan apa yang bisa dibantu TANPA memanggil fungsi fetchPremifyProducts.
-3. Jika fungsi 'fetchPremifyProducts' mengembalikan status "KOSONG", katakan dengan jujur bahwa stok produk tersebut sedang kosong/belum tersedia. Jangan salahkan sistem.
-4. Jika pelanggan sudah setuju mau beli, minta konfirmasi nomor tujuan, lalu panggil tool 'createPakasirInvoice'.`;
+1. Jika pelanggan ingin membeli (misal: "Beli yang 1p1u", "Mau netflix sharing"), panggil 'fetchPremifyProducts' dulu untuk mendapatkan data 'variant_id' produk tersebut, LALU panggil 'createPakasirInvoice' menggunakan data tersebut.
+2. Jika fungsi 'createPakasirInvoice' berhasil, berikan link QRIS-nya dan suruh pelanggan bayar.
+3. Jangan menanyakan metode pembayaran, toko kita hanya menerima QRIS Pakasir otomatis.
+4. Kamu bukan robot/AI. Jangan bahas hal teknis/sistem error ke pelanggan.`;
 
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
@@ -227,7 +238,7 @@ ATURAN KERAS:
             config: {
                 tools: tools,
                 systemInstruction: systemPrompt,
-                temperature: 0.7 
+                temperature: 0.5 
             }
         });
 
@@ -254,12 +265,12 @@ ATURAN KERAS:
                 ],
                 config: { tools: tools, systemInstruction: systemPrompt }
             });
-            return secondResponse.text || "Mohon ditunggu sebentar ya Kak, sedang diproses...";
+            return secondResponse.text || "Sebentar ya Kak, sedang diproses...";
         }
         return response.text || "Halo! Ada yang bisa dibantu?";
     } catch (error) { 
         console.error("🔴 GEMINI CRASH DETAIL:", error?.message || error);
-        return `Duh maaf Kak ${senderName}, aku lagi buka sistem sebentar nih. Boleh ketik ulang pesannya? 🙏😊`; 
+        return `Duh maaf Kak ${senderName}, aku lagi buka sistem sebentar nih. Boleh diulang pesannya? 🙏😊`; 
     }
 }
 
@@ -279,23 +290,20 @@ app.post('/webhook/pakasir', async (req, res) => {
                 const variantId = orderParts[2];
                 const targetWhatsapp = orderParts.slice(3).join('-'); 
 
-                console.log(`[💸 PAYMENT SUCCESS] Nomor ${targetWhatsapp} Lunas membayar. Memotong saldo modal h2h...`);
+                console.log(`[💸 PAYMENT SUCCESS] Nomor ${targetWhatsapp} Lunas. Memotong saldo h2h...`);
 
                 const premifyResult = await createPremifyOrder(variantId, targetWhatsapp);
 
                 if (premifyResult.sukses) {
                     if (sock && sock.user) {
-                        let msgText = `💳 *Pembayaran Terverifikasi Lunas!* 🎉\n\nDana sebesar *Rp ${payload.amount.toLocaleString('id-ID')}* telah kami terima. Sistem kami saat ini sedang memproses pesanan Kakak ke server pusat. Mohon ditunggu sebentar ya Kak! ✨`;
-                        
-                        // Beritahu pelanggan jika ini adalah mode test
-                        if (IS_TEST_MODE) msgText += `\n\n_(ℹ️ Mode Sandbox / Test Aktif - Saldo tidak terpotong)_`;
-                        
+                        let msgText = `💳 *Pembayaran Terverifikasi Lunas!* 🎉\n\nDana sebesar *Rp ${payload.amount.toLocaleString('id-ID')}* telah kami terima. Sistem sedang memproses pesanan Kakak ke server pusat. Mohon ditunggu sebentar ya Kak! ✨`;
+                        if (IS_TEST_MODE) msgText += `\n\n_(ℹ️ Mode Sandbox Aktif - Saldo tidak terpotong)_`;
                         await sock.sendMessage(`${targetWhatsapp}@s.whatsapp.net`, { text: msgText });
                     }
                 } else {
                     if (sock && sock.user) {
                         await sock.sendMessage(`${targetWhatsapp}@s.whatsapp.net`, { 
-                            text: `⚠️ *Antrean Pengisian Sistem*\n\nHalo Kak, pembayaran Kakak sudah masuk, namun antrean server supplier kami sedang sangat padat. Pesanan Kakak akan di-proses secara manual oleh Tim kami secepatnya ya. Terima kasih! 🙏` 
+                            text: `⚠️ *Antrean Pengisian Sistem*\n\nHalo Kak, pembayaran sudah masuk, namun antrean server supplier kami sedang padat. Pesanan Kakak akan di-proses manual oleh Admin secepatnya ya. Terima kasih! 🙏` 
                         });
                     }
                 }
@@ -324,7 +332,6 @@ app.post('/webhook/premify', async (req, res) => {
 
         if (payload.event === 'order.completed') {
             let credsText = "";
-            
             if (data.account_details && Array.isArray(data.account_details)) {
                 data.account_details.forEach(acc => {
                     credsText += `\n📦 *${acc.product || 'Produk'}*\n`;
@@ -342,13 +349,12 @@ app.post('/webhook/premify', async (req, res) => {
                 credsText = "Akun berhasil diaktifkan / Silakan cek email Anda.";
             }
 
-            const textReady = `🎉 *PESANAN SELESAI / COMPLETED* ✅\n\nHalo Kak,\nPesanan akun premium Kakak sudah selesai diproses secara otomatis!\n\n🔑 *DATA KREDENSIAL / AKSES LOGIN:* \n${credsText}\n_Harap amankan data akun di atas. Terima kasih banyak telah berbelanja di Pansa Group! 🚀🌟_`;
+            const textReady = `🎉 *PESANAN SELESAI / COMPLETED* ✅\n\nHalo Kak,\nPesanan akun premium Kakak sudah selesai diproses otomatis!\n\n🔑 *DATA KREDENSIAL / AKSES LOGIN:* \n${credsText}\n_Harap amankan data akun di atas. Terima kasih banyak telah berbelanja di Pansa Group! 🚀🌟_`;
             
             if (sock && sock.user) await sock.sendMessage(customerJid, { text: textReady });
         }
         return res.status(200).json({ success: true });
     } catch (error) { 
-        console.error("Premify Webhook Error:", error);
         return res.status(200).send('OK'); 
     }
 });
@@ -411,7 +417,7 @@ function initBaileysV7() {
                             await sock.sendMessage(senderJid, { text: balanceInfo }, { quoted: msg });
                             continue;
                         } else {
-                            await sock.sendMessage(senderJid, { text: "🔒 _Maaf Kak, perintah tersebut hanya dapat diakses oleh Admin._ 🙏" }, { quoted: msg });
+                            await sock.sendMessage(senderJid, { text: "🔒 _Maaf Kak, perintah ini khusus Admin._ 🙏" }, { quoted: msg });
                             continue;
                         }
                     }
@@ -422,12 +428,9 @@ function initBaileysV7() {
 
                     if (isAiActive) {
                         await sock.sendPresenceUpdate('composing', senderJid);
-                        
                         const aiReply = await getGeminiResponse(bodyMessage, senderName, storeName, cleanSenderNumber);
-                        
                         await delay(750); 
                         await sock.sendPresenceUpdate('paused', senderJid);
-                        
                         await sock.sendMessage(senderJid, { text: aiReply }, { quoted: msg });
                     }
                 }
@@ -436,7 +439,6 @@ function initBaileysV7() {
     });
 }
 
-// Socket IO Dashboard Controller
 io.on('connection', (socket) => {
     if (sock?.user) {
         socket.emit('ready', true);
@@ -466,5 +468,5 @@ app.get('/', (req, res) => { res.render('index'); });
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`Server berjalan di port ${PORT}`);
+    console.log(`Server Pansa Group berjalan di port ${PORT}`);
 });
