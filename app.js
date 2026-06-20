@@ -89,7 +89,6 @@ async function fetchPremifyProducts(searchKeyword = '') {
                 }
             });
 
-            // Cegah AI mengarang bebas jika produk tidak ada di database supplier
             if (flattenedVariants.length === 0) {
                 return [{ 
                     status: "KOSONG", 
@@ -171,8 +170,13 @@ async function getGeminiResponse(userMessage, senderName, currentStoreName, send
             functionDeclarations: [
                 {
                     name: 'fetchPremifyProducts',
-                    description: 'Cari katalog produk digital realtime dari database supplier. Selalu gunakan ini saat pelanggan menanyakan produk, harga, atau stok.',
-                    parameters: { type: Type.OBJECT, properties: { searchKeyword: { type: Type.STRING } } }
+                    description: 'Cari katalog produk digital, harga, dan stok dari database. HANYA gunakan jika pelanggan secara eksplisit menanyakan produk atau harga.',
+                    parameters: { 
+                        type: Type.OBJECT, 
+                        properties: { 
+                            searchKeyword: { type: Type.STRING, description: 'Kata kunci produk yang dicari' } 
+                        } 
+                    }
                 },
                 {
                     name: 'createPakasirInvoice',
@@ -191,15 +195,14 @@ async function getGeminiResponse(userMessage, senderName, currentStoreName, send
             ]
         }];
 
-        const systemPrompt = `Kamu adalah Customer Service sejati dari "${currentStoreName}". 
-Karaktermu: Sangat ramah, asik, sopan, dan sigap. Gunakan bahasa Indonesia sehari-hari yang luwes (pakai aku/kamu atau kami/kakak, sapa pelanggan dengan 'Kak ${senderName}').
+        const systemPrompt = `Kamu adalah Customer Service dari "${currentStoreName}". 
+Karaktermu: Ramah, asik, sopan. Gunakan bahasa Indonesia sehari-hari yang luwes (pakai aku/kamu atau kami/kakak, sapa pelanggan dengan 'Kak ${senderName}').
 
 ATURAN KERAS:
-1. Kamu BUKAN robot atau AI. Jangan pernah menyebut dirimu bot atau AI.
-2. Jika fungsi 'fetchPremifyProducts' mengembalikan status "KOSONG", katakan dengan jujur bahwa stok produk tersebut memang lagi kosong atau belum tersedia. JANGAN PERNAH menyalahkan jaringan atau sistem error.
-3. Selalu sebutkan harga dengan jelas setelah mengecek katalog.
-4. Jika pelanggan sudah setuju mau beli varian tertentu, pastikan minta nomor WA tujuan/Email (jika butuh invite), lalu panggil tool 'createPakasirInvoice' untuk memberikan link bayar QRIS.
-5. Balas dengan santai seperti gaya chat manusia asli di WhatsApp.`;
+1. Kamu BUKAN robot atau AI.
+2. Jika pelanggan hanya menyapa (contoh: "Hai", "Halo", "P", "Ping"), balaslah sapaannya dengan ramah dan tanyakan apa yang bisa dibantu TANPA memanggil fungsi fetchPremifyProducts.
+3. Jika fungsi 'fetchPremifyProducts' mengembalikan status "KOSONG", katakan dengan jujur bahwa stok produk tersebut sedang kosong/belum tersedia. Jangan salahkan sistem.
+4. Jika pelanggan sudah setuju mau beli, minta konfirmasi nomor tujuan, lalu panggil tool 'createPakasirInvoice'.`;
 
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
@@ -216,26 +219,32 @@ ATURAN KERAS:
             const call = functionCalls[0];
             let functionResult;
             
+            // Amankan argument agar tidak undefined
+            const args = call.args || {};
+            
             if (call.name === 'fetchPremifyProducts') {
-                functionResult = await fetchPremifyProducts(call.args.searchKeyword);
+                const keyword = args.searchKeyword || '';
+                functionResult = await fetchPremifyProducts(keyword);
             } else if (call.name === 'createPakasirInvoice') {
-                functionResult = await createPakasirInvoice(call.args.variantId, call.args.productName, call.args.variantName, call.args.finalPrice, senderWhatsapp);
+                functionResult = await createPakasirInvoice(args.variantId, args.productName, args.variantName, args.finalPrice, senderWhatsapp);
             }
 
             const secondResponse = await ai.models.generateContent({
                 model: 'gemini-2.5-flash',
                 contents: [
                     { role: 'user', parts: [{ text: userMessage }] },
-                    response.candidates[0].content,
-                    { role: 'function', parts: [{ functionResponse: { name: call.name, response: { result: functionResult } } }] }
+                    response.candidates[0].content, 
+                    // PERBAIKAN FATAL: Role balasan fungsi harus di-set sebagai 'user'
+                    { role: 'user', parts: [{ functionResponse: { name: call.name, response: { result: functionResult } } }] } 
                 ],
                 config: { tools: tools, systemInstruction: systemPrompt }
             });
-            return secondResponse.text;
+            return secondResponse.text || "Mohon ditunggu sebentar ya Kak, sedang diproses...";
         }
-        return response.text;
+        return response.text || "Halo! Ada yang bisa dibantu?";
     } catch (error) { 
-        return `Duh maaf Kak ${senderName}, aku lagi buka sistem sebentar nih. Boleh ketik ulang produk yang dicari? 🙏😊`; 
+        console.error("🔴 GEMINI CRASH DETAIL:", error?.message || error);
+        return `Duh maaf Kak ${senderName}, aku lagi buka sistem sebentar nih. Boleh ketik ulang pesannya? 🙏😊`; 
     }
 }
 
@@ -282,7 +291,7 @@ app.post('/webhook/pakasir', async (req, res) => {
 
 app.post('/webhook/premify', async (req, res) => {
     try {
-        const payload = req.body; // Gunakan seluruh body
+        const payload = req.body; 
         
         // Refresh dashboard frontend
         const updatedTransactions = await fetchPremifyTransactions();
@@ -292,7 +301,6 @@ app.post('/webhook/premify', async (req, res) => {
         if (!payload.data || !payload.event) return res.status(200).send('OK');
         const data = payload.data;
         
-        // Asumsi data target WA dikirim di webhook, jika tidak, kita harus extract dari tempat lain
         const customerPhone = data.customer?.whatsapp || data.email_invite; 
         if (!customerPhone) return res.status(200).send('OK');
         
@@ -301,7 +309,6 @@ app.post('/webhook/premify', async (req, res) => {
         if (payload.event === 'order.completed') {
             let credsText = "";
             
-            // Format Data JSON Kredensial Menjadi Teks WA yang rapi
             if (data.account_details && Array.isArray(data.account_details)) {
                 data.account_details.forEach(acc => {
                     credsText += `\n📦 *${acc.product || 'Produk'}*\n`;
