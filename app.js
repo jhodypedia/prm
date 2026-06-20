@@ -22,10 +22,17 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 app.set('view engine', 'ejs');
 app.use(express.static('public'));
 
+// ========================================================
+// ⚙️ GLOBAL SETTINGS & TOGGLES
+// ========================================================
 let sock = null;
 let isAiActive = true;
 let storeName = "Pansa Group"; 
 const recentChats = []; 
+
+// 🔴 SAKELAR MODE TEST (SANDBOX) 🔴
+// Ubah menjadi 'false' jika kamu sudah siap rilis dan ingin memotong saldo asli
+const IS_TEST_MODE = true; 
 
 // Cache untuk Anti-Spam (Mencegah Bot membalas 2x untuk pesan yang sama)
 const processedMessages = new Set();
@@ -52,7 +59,11 @@ async function checkPremifyBalance() {
             const rawBalance = response.data.data.balance || response.data.data.current_balance;
             const currency = response.data.data.currency || "IDR";
             const formattedBalance = new Intl.NumberFormat('id-ID', { style: 'currency', currency: currency, minimumFractionDigits: 0 }).format(rawBalance);
-            return `💻 *SALDO SERVER API MODAL*\n\n• Sisa Saldo: *${formattedBalance}*\n• Status: Terhubung Sempurna ✅`;
+            
+            let statusText = `Terhubung Sempurna ✅`;
+            if (IS_TEST_MODE) statusText += `\n⚠️ *(BERJALAN DALAM MODE TEST / SANDBOX)*`;
+
+            return `💻 *SALDO SERVER API MODAL*\n\n• Sisa Saldo: *${formattedBalance}*\n• Status: ${statusText}`;
         }
         return "⚠️ Gagal mengambil data saldo server.";
     } catch (error) { 
@@ -62,16 +73,12 @@ async function checkPremifyBalance() {
 
 async function fetchPremifyProducts(searchKeyword = '') {
     console.log(`\n[🔍 DEBUG API] AI mencoba mencari produk: "${searchKeyword}"`);
-    console.log(`[🔑 DEBUG API] Cek API Key: ${process.env.PREMIFY_API_KEY ? 'ADA (Valid format string)' : 'KOSONG / UNDEFINED!'}`);
 
     try {
         const response = await axios.post(`${PREMIFY_BASE_URL}/products`, {
             api_key: process.env.PREMIFY_API_KEY
         }, { headers: PREMIFY_HEADERS });
         
-        // Tampilkan response asli dari server di terminal
-        console.log(`[🟢 DEBUG API] Response Server (Status ${response.status}):`, JSON.stringify(response.data, null, 2));
-
         if (response.data && response.data.success === true) {
             const products = response.data.data || [];
             const flattenedVariants = [];
@@ -96,27 +103,16 @@ async function fetchPremifyProducts(searchKeyword = '') {
             });
 
             if (flattenedVariants.length === 0) {
-                console.log(`[🟡 DEBUG API] Produk ditemukan di database, tapi tidak ada yang cocok dengan kata kunci "${searchKeyword}"`);
                 return [{ 
                     status: "KOSONG", 
                     keterangan: `Produk dengan kata kunci '${searchKeyword}' tidak ditemukan atau sedang habis di supplier.` 
                 }];
             }
-
-            console.log(`[🟢 DEBUG API] Berhasil mengirim ${flattenedVariants.length} varian ke otak AI.`);
             return flattenedVariants.slice(0, 15);
         }
-        
-        console.log(`[🔴 DEBUG API] Request sukses masuk server, tapi server menolak:`, response.data);
-        return [{ status: "ERROR", keterangan: `Gagal memuat produk. Pesan Server: ${response.data?.message || 'Unknown'}` }];
-
+        return [{ status: "ERROR", keterangan: `Gagal memuat produk dari server.` }];
     } catch (error) { 
-        // INI ADALAH PENYEBAB UTAMANYA. Kita print error aslinya ke terminal.
-        console.error(`\n[❌ FATAL ERROR API] Gagal Hit Endpoint Premify!`);
-        console.error(`Status Code:`, error?.response?.status || 'Tidak ada (Masalah koneksi)');
-        console.error(`Pesan Error Server:`, error?.response?.data || error.message);
-        
-        return [{ status: "ERROR", keterangan: `Beri tahu pelanggan: Sistem error dengan kode ${error?.response?.status || 'Network'}. Silakan lapor Owner.` }]; 
+        return [{ status: "ERROR", keterangan: `Gangguan jaringan saat cek produk.` }]; 
     }
 }
 
@@ -124,11 +120,14 @@ async function createPakasirInvoice(variantId, productName, variantName, finalPr
     try {
         const orderId = `INV-${Date.now()}-${variantId}-${customerWhatsapp}`;
         
+        // Catatan: Jika ingin test mode di Pakasir, pastikan PAKASIR_PROJECT_SLUG dan 
+        // PAKASIR_API_KEY di .env adalah milik "Proyek Sandbox" yang kamu buat di dashboard Pakasir.
         const response = await axios.post('https://app.pakasir.com/api/transactioncreate/qris', {
             project: process.env.PAKASIR_PROJECT_SLUG,
             order_id: orderId,
             amount: finalPrice,
-            api_key: process.env.PAKASIR_API_KEY
+            api_key: process.env.PAKASIR_API_KEY,
+            is_test: IS_TEST_MODE // Opsional jika Pakasir mendukung flag ini
         }, { headers: { 'Content-Type': 'application/json' } });
 
         if (response.data && response.data.payment) {
@@ -150,7 +149,8 @@ async function createPremifyOrder(variantId, targetInput) {
         const payload = { 
             api_key: process.env.PREMIFY_API_KEY,
             variant_id: variantId, 
-            quantity: 1 
+            quantity: 1,
+            is_test: IS_TEST_MODE // MENGAKTIFKAN MODE TEST PREMIFY
         };
         
         if (targetInput && targetInput.includes('@')) payload.email_invite = targetInput.trim();
@@ -158,6 +158,7 @@ async function createPremifyOrder(variantId, targetInput) {
         const response = await axios.post(`${PREMIFY_BASE_URL}/order`, payload, { headers: PREMIFY_HEADERS });
         
         if (response.data && response.data.success === true) {
+            console.log(`[🚀 PREMIFY ORDER] Sukses membuat pesanan. Mode Test: ${IS_TEST_MODE}`);
             return { sukses: true, order_id: response.data.data.order_id, status: response.data.data.status };
         }
         return { sukses: false, pesan: response.data.message };
@@ -235,7 +236,6 @@ ATURAN KERAS:
             const call = functionCalls[0];
             let functionResult;
             
-            // Amankan argument agar tidak undefined
             const args = call.args || {};
             
             if (call.name === 'fetchPremifyProducts') {
@@ -250,7 +250,6 @@ ATURAN KERAS:
                 contents: [
                     { role: 'user', parts: [{ text: userMessage }] },
                     response.candidates[0].content, 
-                    // PERBAIKAN FATAL: Role balasan fungsi harus di-set sebagai 'user'
                     { role: 'user', parts: [{ functionResponse: { name: call.name, response: { result: functionResult } } }] } 
                 ],
                 config: { tools: tools, systemInstruction: systemPrompt }
@@ -286,9 +285,12 @@ app.post('/webhook/pakasir', async (req, res) => {
 
                 if (premifyResult.sukses) {
                     if (sock && sock.user) {
-                        await sock.sendMessage(`${targetWhatsapp}@s.whatsapp.net`, { 
-                            text: `💳 *Pembayaran Terverifikasi Lunas!* 🎉\n\nDana sebesar *Rp ${payload.amount.toLocaleString('id-ID')}* telah kami terima. Sistem kami saat ini sedang memproses pesanan Kakak ke server pusat. Mohon ditunggu sebentar ya Kak! ✨` 
-                        });
+                        let msgText = `💳 *Pembayaran Terverifikasi Lunas!* 🎉\n\nDana sebesar *Rp ${payload.amount.toLocaleString('id-ID')}* telah kami terima. Sistem kami saat ini sedang memproses pesanan Kakak ke server pusat. Mohon ditunggu sebentar ya Kak! ✨`;
+                        
+                        // Beritahu pelanggan jika ini adalah mode test
+                        if (IS_TEST_MODE) msgText += `\n\n_(ℹ️ Mode Sandbox / Test Aktif - Saldo tidak terpotong)_`;
+                        
+                        await sock.sendMessage(`${targetWhatsapp}@s.whatsapp.net`, { text: msgText });
                     }
                 } else {
                     if (sock && sock.user) {
@@ -309,11 +311,9 @@ app.post('/webhook/premify', async (req, res) => {
     try {
         const payload = req.body; 
         
-        // Refresh dashboard frontend
         const updatedTransactions = await fetchPremifyTransactions();
         io.emit('transactions-data', updatedTransactions);
 
-        // Validasi payload webhook
         if (!payload.data || !payload.event) return res.status(200).send('OK');
         const data = payload.data;
         
@@ -391,15 +391,12 @@ function initBaileysV7() {
     sock.ev.on('messages.upsert', async (m) => {
         if (m.type === 'notify') {
             for (const msg of m.messages) {
-                // 1. CEK ANTI SPAM & MENCEGAH DOUBLE RESPONSE
                 if (msg.key && msg.key.id) {
                     if (processedMessages.has(msg.key.id)) continue; 
                     processedMessages.add(msg.key.id);
-                    // Cegah memory leak
                     if (processedMessages.size > 1000) processedMessages.clear();
                 }
 
-                // 2. HANYA PROSES PERSONAL CHAT
                 if (!msg.key.fromMe && msg.message && !msg.key.remoteJid.endsWith('@g.us')) {
                     const senderJid = msg.key.remoteJid;
                     const senderName = msg.pushName || "Kak";
@@ -424,12 +421,11 @@ function initBaileysV7() {
                     io.emit('chats-data', recentChats);
 
                     if (isAiActive) {
-                        // Animasi Bot Sedang Mengetik
                         await sock.sendPresenceUpdate('composing', senderJid);
                         
                         const aiReply = await getGeminiResponse(bodyMessage, senderName, storeName, cleanSenderNumber);
                         
-                        await delay(750); // Jeda natural layaknya manusia
+                        await delay(750); 
                         await sock.sendPresenceUpdate('paused', senderJid);
                         
                         await sock.sendMessage(senderJid, { text: aiReply }, { quoted: msg });
