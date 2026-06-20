@@ -36,6 +36,9 @@ const IS_TEST_MODE = true;
 // Cache untuk Anti-Spam (Mencegah Bot membalas 2x)
 const processedMessages = new Set();
 
+// 🧠 MEMORI AI (Menyimpan riwayat obrolan agar AI tidak amnesia)
+const userSessions = new Map(); 
+
 const { state, saveCreds } = await useMultiFileAuthState('baileys_auth_store');
 const { version } = await fetchLatestBaileysVersion();
 
@@ -71,7 +74,7 @@ async function checkPremifyBalance() {
 }
 
 async function fetchPremifyProducts(searchKeyword = '') {
-    console.log(`\n[🔍 DEBUG API] AI mencoba mencari produk: "${searchKeyword}"`);
+    console.log(`\n[🔍 DEBUG API] AI mencari produk: "${searchKeyword}"`);
 
     try {
         const response = await axios.post(`${PREMIFY_BASE_URL}/products`, {
@@ -85,9 +88,8 @@ async function fetchPremifyProducts(searchKeyword = '') {
             products.forEach(product => {
                 const prodNameLower = product.name.toLowerCase();
                 const searchLower = searchKeyword.toLowerCase().trim();
-                const firstWord = searchLower.split(' ')[0]; // Ambil kata pertama saja (misal: "netflix")
+                const firstWord = searchLower.split(' ')[0]; 
 
-                // ALGORITMA PENCARIAN CERDAS (TOLERAN/FUZZY SEARCH)
                 const isMatch = !searchKeyword || 
                                 prodNameLower.includes(searchLower) || 
                                 searchLower.includes(prodNameLower) || 
@@ -115,7 +117,7 @@ async function fetchPremifyProducts(searchKeyword = '') {
             if (flattenedVariants.length === 0) {
                 return [{ 
                     status: "KOSONG", 
-                    keterangan: `Produk dengan kata kunci '${searchKeyword}' tidak ditemukan atau sedang habis di supplier.` 
+                    keterangan: `Produk dengan kata '${searchKeyword}' tidak ditemukan / habis.` 
                 }];
             }
             return flattenedVariants.slice(0, 15);
@@ -128,6 +130,7 @@ async function fetchPremifyProducts(searchKeyword = '') {
 
 async function createPakasirInvoice(variantId, productName, variantName, finalPrice, customerWhatsapp) {
     try {
+        console.log(`\n[💳 DEBUG API] AI membuat tagihan untuk varian ID: ${variantId}`);
         const orderId = `INV-${Date.now()}-${variantId}-${customerWhatsapp}`;
         
         const response = await axios.post('https://app.pakasir.com/api/transactioncreate/qris', {
@@ -160,33 +163,25 @@ async function createPremifyOrder(variantId, targetInput) {
             quantity: 1,
             is_test: IS_TEST_MODE 
         };
-        
         if (targetInput && targetInput.includes('@')) payload.email_invite = targetInput.trim();
         
         const response = await axios.post(`${PREMIFY_BASE_URL}/order`, payload, { headers: PREMIFY_HEADERS });
-        
         if (response.data && response.data.success === true) {
-            console.log(`[🚀 PREMIFY ORDER] Sukses membuat pesanan. Mode Test: ${IS_TEST_MODE}`);
             return { sukses: true, order_id: response.data.data.order_id, status: response.data.data.status };
         }
         return { sukses: false, pesan: response.data.message };
-    } catch (error) { 
-        return { sukses: false, pesan: "Gangguan saat checkout h2h ke supplier pusat." }; 
-    }
+    } catch (error) { return { sukses: false, pesan: "Gangguan checkout h2h." }; }
 }
 
 async function fetchPremifyTransactions() {
     try {
-        const response = await axios.post(`${PREMIFY_BASE_URL}/transactions`, {
-            api_key: process.env.PREMIFY_API_KEY
-        }, { headers: PREMIFY_HEADERS });
-        
+        const response = await axios.post(`${PREMIFY_BASE_URL}/transactions`, { api_key: process.env.PREMIFY_API_KEY }, { headers: PREMIFY_HEADERS });
         return response.data && response.data.success === true ? response.data.data : [];
     } catch (error) { return []; }
 }
 
 // ========================================================
-// GEMINI AI INTEGRATION (FUNCTION CALLING INTERCEPTOR)
+// 🧠 GEMINI AI INTEGRATION (DENGAN MEMORI & LOOPING)
 // ========================================================
 
 async function getGeminiResponse(userMessage, senderName, currentStoreName, senderWhatsapp) {
@@ -195,24 +190,19 @@ async function getGeminiResponse(userMessage, senderName, currentStoreName, send
             functionDeclarations: [
                 {
                     name: 'fetchPremifyProducts',
-                    description: 'Cari katalog produk digital, harga, dan stok dari database. HANYA gunakan jika pelanggan menanyakan ketersediaan produk atau harga.',
+                    description: 'Cari katalog produk, harga, dan stok.',
                     parameters: { 
                         type: Type.OBJECT, 
-                        properties: { 
-                            searchKeyword: { 
-                                type: Type.STRING, 
-                                description: 'Wajib 1 kata utama saja (contoh: "netflix", "canva", "spotify"). Jangan masukkan detail durasi atau tipe varian.' 
-                            } 
-                        } 
+                        properties: { searchKeyword: { type: Type.STRING, description: 'Wajib 1 kata utama saja (contoh: "netflix").' } } 
                     }
                 },
                 {
                     name: 'createPakasirInvoice',
-                    description: 'Buat link tagihan QRIS ketika pelanggan FIX SETUJU ingin membeli produk tertentu.',
+                    description: 'Buat tagihan/invoice QRIS ketika pelanggan SUDAH SETUJU membeli (misal bilang "Oke", "Boleh", "Gas"). AMBIL data varian dari hasil fetch produk sebelumnya.',
                     parameters: { 
                         type: Type.OBJECT, 
                         properties: { 
-                            variantId: { type: Type.STRING, description: 'ID varian dari produk yang dipilih pelanggan (didapat dari fetchPremifyProducts)' },
+                            variantId: { type: Type.STRING },
                             productName: { type: Type.STRING },
                             variantName: { type: Type.STRING },
                             finalPrice: { type: Type.NUMBER }
@@ -224,53 +214,65 @@ async function getGeminiResponse(userMessage, senderName, currentStoreName, send
         }];
 
         const systemPrompt = `Kamu adalah Customer Service handal dari "${currentStoreName}". 
-Sifatmu ramah, asik, dan to the point. Gunakan bahasa Indonesia luwes (aku/kamu). Sapa pelanggan 'Kak ${senderName}'.
-
+Sifatmu ramah dan to the point. Sapa pelanggan 'Kak ${senderName}'.
 ATURAN KERAS:
-1. Jika pelanggan ingin membeli (misal: "Beli yang 1p1u", "Mau netflix sharing"), panggil 'fetchPremifyProducts' dulu untuk mendapatkan data 'variant_id' produk tersebut, LALU panggil 'createPakasirInvoice' menggunakan data tersebut.
-2. Jika fungsi 'createPakasirInvoice' berhasil, berikan link QRIS-nya dan suruh pelanggan bayar.
-3. Jangan menanyakan metode pembayaran, toko kita hanya menerima QRIS Pakasir otomatis.
-4. Kamu bukan robot/AI. Jangan bahas hal teknis/sistem error ke pelanggan.`;
+1. Jika pelanggan setuju membeli (bilang "Oke", "Ya", dll), LANSUNG panggil 'createPakasirInvoice' menggunakan data produk terakhir yang dibahas. 
+2. Jika fungsi 'createPakasirInvoice' berhasil, berikan link QRIS-nya dan suruh pelanggan bayar.`;
 
-        const response = await ai.models.generateContent({
+        // 1. Ambil atau Buat Memori Chat untuk Nomor Ini
+        if (!userSessions.has(senderWhatsapp)) {
+            userSessions.set(senderWhatsapp, []);
+        }
+        const chatHistory = userSessions.get(senderWhatsapp);
+
+        // Bersihkan memori lama agar tidak berat (simpan 12 riwayat terakhir)
+        while (chatHistory.length > 12) chatHistory.shift();
+
+        // Masukkan chat pelanggan terbaru ke memori
+        chatHistory.push({ role: 'user', parts: [{ text: userMessage }] });
+
+        let response = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
-            contents: userMessage,
-            config: {
-                tools: tools,
-                systemInstruction: systemPrompt,
-                temperature: 0.5 
-            }
+            contents: chatHistory,
+            config: { tools: tools, systemInstruction: systemPrompt, temperature: 0.5 }
         });
 
-        const functionCalls = response.functionCalls;
-        if (functionCalls && functionCalls.length > 0) {
-            const call = functionCalls[0];
+        // 2. SISTEM LOOPING: Biarkan AI menjalankan fungsi berkali-kali jika butuh
+        let loopCount = 0;
+        while (response.functionCalls && response.functionCalls.length > 0 && loopCount < 3) {
+            loopCount++;
+            const call = response.functionCalls[0];
             let functionResult;
-            
             const args = call.args || {};
             
             if (call.name === 'fetchPremifyProducts') {
-                const keyword = args.searchKeyword || '';
-                functionResult = await fetchPremifyProducts(keyword);
+                functionResult = await fetchPremifyProducts(args.searchKeyword || '');
             } else if (call.name === 'createPakasirInvoice') {
                 functionResult = await createPakasirInvoice(args.variantId, args.productName, args.variantName, args.finalPrice, senderWhatsapp);
             }
 
-            const secondResponse = await ai.models.generateContent({
+            // Simpan jejak AI memanggil alat ke memori
+            chatHistory.push(response.candidates[0].content);
+            // Simpan hasil alat tersebut ke memori agar AI bisa membacanya
+            chatHistory.push({ role: 'user', parts: [{ functionResponse: { name: call.name, response: { result: functionResult } } }] });
+
+            // Minta AI merespons lagi setelah melihat hasil alatnya
+            response = await ai.models.generateContent({
                 model: 'gemini-2.5-flash',
-                contents: [
-                    { role: 'user', parts: [{ text: userMessage }] },
-                    response.candidates[0].content, 
-                    { role: 'user', parts: [{ functionResponse: { name: call.name, response: { result: functionResult } } }] } 
-                ],
-                config: { tools: tools, systemInstruction: systemPrompt }
+                contents: chatHistory,
+                config: { tools: tools, systemInstruction: systemPrompt, temperature: 0.5 }
             });
-            return secondResponse.text || "Sebentar ya Kak, sedang diproses...";
         }
-        return response.text || "Halo! Ada yang bisa dibantu?";
+
+        const finalReply = response.text || "Sebentar ya Kak, tagihannya sedang disiapkan...";
+        
+        // Simpan jawaban akhir AI ke dalam memori agar nyambung untuk chat berikutnya!
+        chatHistory.push({ role: 'model', parts: [{ text: finalReply }] });
+
+        return finalReply;
     } catch (error) { 
         console.error("🔴 GEMINI CRASH DETAIL:", error?.message || error);
-        return `Duh maaf Kak ${senderName}, aku lagi buka sistem sebentar nih. Boleh diulang pesannya? 🙏😊`; 
+        return `Duh maaf Kak ${senderName}, sistemku agak error dikit nih. Boleh diulang? 🙏`; 
     }
 }
 
@@ -281,53 +283,41 @@ ATURAN KERAS:
 app.post('/webhook/pakasir', async (req, res) => {
     try {
         const payload = req.body;
-        
         if (payload.status === 'completed') {
             const orderId = payload.order_id; 
             const orderParts = orderId.split('-');
-            
             if (orderParts.length >= 4) {
                 const variantId = orderParts[2];
                 const targetWhatsapp = orderParts.slice(3).join('-'); 
-
-                console.log(`[💸 PAYMENT SUCCESS] Nomor ${targetWhatsapp} Lunas. Memotong saldo h2h...`);
-
                 const premifyResult = await createPremifyOrder(variantId, targetWhatsapp);
 
                 if (premifyResult.sukses) {
                     if (sock && sock.user) {
-                        let msgText = `💳 *Pembayaran Terverifikasi Lunas!* 🎉\n\nDana sebesar *Rp ${payload.amount.toLocaleString('id-ID')}* telah kami terima. Sistem sedang memproses pesanan Kakak ke server pusat. Mohon ditunggu sebentar ya Kak! ✨`;
-                        if (IS_TEST_MODE) msgText += `\n\n_(ℹ️ Mode Sandbox Aktif - Saldo tidak terpotong)_`;
+                        let msgText = `💳 *Pembayaran Terverifikasi Lunas!* 🎉\n\nDana *Rp ${payload.amount.toLocaleString('id-ID')}* telah kami terima. Sistem sedang memproses pesanan Kakak...`;
+                        if (IS_TEST_MODE) msgText += `\n\n_(ℹ️ Mode Sandbox Aktif)_`;
                         await sock.sendMessage(`${targetWhatsapp}@s.whatsapp.net`, { text: msgText });
                     }
                 } else {
                     if (sock && sock.user) {
-                        await sock.sendMessage(`${targetWhatsapp}@s.whatsapp.net`, { 
-                            text: `⚠️ *Antrean Pengisian Sistem*\n\nHalo Kak, pembayaran sudah masuk, namun antrean server supplier kami sedang padat. Pesanan Kakak akan di-proses manual oleh Admin secepatnya ya. Terima kasih! 🙏` 
-                        });
+                        await sock.sendMessage(`${targetWhatsapp}@s.whatsapp.net`, { text: `⚠️ Antrean server supplier sedang padat. Pesanan diproses manual.` });
                     }
                 }
             }
         }
         return res.status(200).json({ success: true });
-    } catch (error) { 
-        return res.status(200).send('OK'); 
-    }
+    } catch (error) { return res.status(200).send('OK'); }
 });
 
 app.post('/webhook/premify', async (req, res) => {
     try {
         const payload = req.body; 
-        
         const updatedTransactions = await fetchPremifyTransactions();
         io.emit('transactions-data', updatedTransactions);
 
         if (!payload.data || !payload.event) return res.status(200).send('OK');
         const data = payload.data;
-        
         const customerPhone = data.customer?.whatsapp || data.email_invite; 
         if (!customerPhone) return res.status(200).send('OK');
-        
         const customerJid = `${customerPhone}@s.whatsapp.net`;
 
         if (payload.event === 'order.completed') {
@@ -338,25 +328,18 @@ app.post('/webhook/premify', async (req, res) => {
                     if (acc.details && Array.isArray(acc.details)) {
                         acc.details.forEach(det => {
                             if (det.credentials && Array.isArray(det.credentials)) {
-                                det.credentials.forEach(cred => {
-                                    credsText += `• ${cred.label}: ${cred.value}\n`;
-                                });
+                                det.credentials.forEach(cred => { credsText += `• ${cred.label}: ${cred.value}\n`; });
                             }
                         });
                     }
                 });
-            } else {
-                credsText = "Akun berhasil diaktifkan / Silakan cek email Anda.";
-            }
+            } else { credsText = "Silakan cek email Anda."; }
 
-            const textReady = `🎉 *PESANAN SELESAI / COMPLETED* ✅\n\nHalo Kak,\nPesanan akun premium Kakak sudah selesai diproses otomatis!\n\n🔑 *DATA KREDENSIAL / AKSES LOGIN:* \n${credsText}\n_Harap amankan data akun di atas. Terima kasih banyak telah berbelanja di Pansa Group! 🚀🌟_`;
-            
+            const textReady = `🎉 *PESANAN SELESAI / COMPLETED* ✅\n\n🔑 *DATA AKSES LOGIN:* \n${credsText}\n_Terima kasih telah berbelanja di Pansa Group! 🚀_`;
             if (sock && sock.user) await sock.sendMessage(customerJid, { text: textReady });
         }
         return res.status(200).json({ success: true });
-    } catch (error) { 
-        return res.status(200).send('OK'); 
-    }
+    } catch (error) { return res.status(200).send('OK'); }
 });
 
 // ========================================================
@@ -365,49 +348,31 @@ app.post('/webhook/premify', async (req, res) => {
 
 function initBaileysV7() {
     sock = makeWASocket({
-        version,
-        auth: state,
-        printQRInTerminal: true, 
-        logger: pino({ level: 'silent' }), 
-        browser: ["Ubuntu", "Chrome", "20.0.04"],
-        syncFullHistory: false,            
-        downloadHistoryCategories: [],     
-        markOnlineOnConnect: true,         
-        connectTimeoutMs: 60000,           
-        keepAliveIntervalMs: 30000
+        version, auth: state, printQRInTerminal: true, logger: pino({ level: 'silent' }), 
+        browser: ["Ubuntu", "Chrome", "20.0.04"], markOnlineOnConnect: true
     });
-
     sock.ev.on('creds.update', saveCreds);
-
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect } = update;
         if (connection === 'close') {
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            io.emit('ready', false);
-            if (shouldReconnect) initBaileysV7(); 
+            if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) initBaileysV7(); 
         } else if (connection === 'open') {
             io.emit('status', `Terhubung sebagai: ${storeName} ✅`);
             io.emit('ready', true);
-            io.emit('store-name', storeName);
-            io.emit('chats-data', recentChats);
             fetchPremifyTransactions().then(trx => io.emit('transactions-data', trx));
         }
     });
-
     sock.ev.on('messages.upsert', async (m) => {
         if (m.type === 'notify') {
             for (const msg of m.messages) {
                 if (msg.key && msg.key.id) {
                     if (processedMessages.has(msg.key.id)) continue; 
                     processedMessages.add(msg.key.id);
-                    if (processedMessages.size > 1000) processedMessages.clear();
                 }
-
                 if (!msg.key.fromMe && msg.message && !msg.key.remoteJid.endsWith('@g.us')) {
                     const senderJid = msg.key.remoteJid;
                     const senderName = msg.pushName || "Kak";
                     const bodyMessage = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
-
                     if (!bodyMessage) continue;
                     const cleanSenderNumber = senderJid.split('@')[0];
 
@@ -415,9 +380,6 @@ function initBaileysV7() {
                         if (cleanSenderNumber === process.env.ADMIN_NUMBER) {
                             const balanceInfo = await checkPremifyBalance();
                             await sock.sendMessage(senderJid, { text: balanceInfo }, { quoted: msg });
-                            continue;
-                        } else {
-                            await sock.sendMessage(senderJid, { text: "🔒 _Maaf Kak, perintah ini khusus Admin._ 🙏" }, { quoted: msg });
                             continue;
                         }
                     }
@@ -440,20 +402,9 @@ function initBaileysV7() {
 }
 
 io.on('connection', (socket) => {
-    if (sock?.user) {
-        socket.emit('ready', true);
-        socket.emit('status', `Terhubung sebagai: ${storeName} ✅`);
-        socket.emit('store-name', storeName);
-        socket.emit('chats-data', recentChats);
-        fetchPremifyTransactions().then(trx => socket.emit('transactions-data', trx));
-    }
     socket.on('request-pairing', async (phoneNumber) => {
-        try {
-            const code = await sock.requestPairingCode(phoneNumber.replace(/[^0-9]/g, ''));
-            socket.emit('pairing-code', code);
-        } catch (error) {
-            console.error('Gagal generate pairing code:', error);
-        }
+        const code = await sock.requestPairingCode(phoneNumber.replace(/[^0-9]/g, ''));
+        socket.emit('pairing-code', code);
     });
     socket.on('toggle-ai', (status) => { isAiActive = status; });
     socket.on('refresh-transactions', async () => {
@@ -463,10 +414,5 @@ io.on('connection', (socket) => {
 });
 
 initBaileysV7();
-
 app.get('/', (req, res) => { res.render('index'); });
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`Server Pansa Group berjalan di port ${PORT}`);
-});
+server.listen(process.env.PORT || 3000, () => { console.log(`Server Pansa Group berjalan di port ${process.env.PORT || 3000}`); });
