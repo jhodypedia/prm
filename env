@@ -1,6 +1,7 @@
-GEMINI_API_KEY=isi_api_key_gemini_anda_disini
-PREMIFY_API_KEY=isi_api_key_premify_anda_disini
-PAKASIR_API_KEY=isi_api_key_pakasir_anda_disini
-ADMIN_NUMBER=
-MARKUP_UNTUNG=2000
 PORT=3000
+GEMINI_API_KEY=api_key_gemini_kamu
+PREMIFY_API_KEY=api_key_premify_kamu
+PAKASIR_API_KEY=api_key_pakasir_kamu
+PAKASIR_PROJECT_SLUG=slug_proyek_pakasir_kamu
+ADMIN_NUMBER=6281234567890
+MARKUP_UNTUNG=2000
