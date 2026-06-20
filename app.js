@@ -5,6 +5,7 @@ import { Server } from 'socket.io';
 import { GoogleGenAI, Type } from '@google/genai';
 import pino from 'pino';
 import axios from 'axios';
+import QRCode from 'qrcode'; // TAMBAHAN: Library pembuat QR Image
 import makeWASocket, { 
     useMultiFileAuthState, 
     DisconnectReason, 
@@ -36,7 +37,7 @@ const IS_TEST_MODE = true;
 // Cache untuk Anti-Spam (Mencegah Bot membalas 2x)
 const processedMessages = new Set();
 
-// 🧠 MEMORI AI (Menyimpan riwayat obrolan agar AI tidak amnesia)
+// 🧠 MEMORI AI (Menyimpan riwayat obrolan)
 const userSessions = new Map(); 
 
 const { state, saveCreds } = await useMultiFileAuthState('baileys_auth_store');
@@ -142,11 +143,14 @@ async function createPakasirInvoice(variantId, productName, variantName, finalPr
         }, { headers: { 'Content-Type': 'application/json' } });
 
         if (response.data && response.data.payment) {
+            // Pakasir mengembalikan data mentah QRIS di properti "payment" atau "payment_number"
+            const rawQrisString = response.data.payment || response.data.payment_number;
             return {
                 sukses: true,
                 invoice_url: `https://app.pakasir.com/pay/${process.env.PAKASIR_PROJECT_SLUG}/${finalPrice}?order_id=${orderId}&qris_only=1`,
                 reference_id: orderId,
-                price: finalPrice
+                price: finalPrice,
+                qris_string: rawQrisString // Kita kirim string ini ke Baileys untuk diubah jadi gambar
             };
         }
         return { sukses: false, pesan: "Gagal memproses QRIS Pakasir." };
@@ -217,18 +221,14 @@ async function getGeminiResponse(userMessage, senderName, currentStoreName, send
 Sifatmu ramah dan to the point. Sapa pelanggan 'Kak ${senderName}'.
 ATURAN KERAS:
 1. Jika pelanggan setuju membeli (bilang "Oke", "Ya", dll), LANSUNG panggil 'createPakasirInvoice' menggunakan data produk terakhir yang dibahas. 
-2. Jika fungsi 'createPakasirInvoice' berhasil, berikan link QRIS-nya dan suruh pelanggan bayar.`;
+2. Jika fungsi 'createPakasirInvoice' sukses, beri tahu pelanggan bahwa kode QRIS akan dikirimkan di bawah pesan ini dan suruh mereka scan gambarnya. Jangan mengirim link web jika tidak ditanya.`;
 
-        // 1. Ambil atau Buat Memori Chat untuk Nomor Ini
         if (!userSessions.has(senderWhatsapp)) {
             userSessions.set(senderWhatsapp, []);
         }
         const chatHistory = userSessions.get(senderWhatsapp);
 
-        // Bersihkan memori lama agar tidak berat (simpan 12 riwayat terakhir)
         while (chatHistory.length > 12) chatHistory.shift();
-
-        // Masukkan chat pelanggan terbaru ke memori
         chatHistory.push({ role: 'user', parts: [{ text: userMessage }] });
 
         let response = await ai.models.generateContent({
@@ -237,8 +237,10 @@ ATURAN KERAS:
             config: { tools: tools, systemInstruction: systemPrompt, temperature: 0.5 }
         });
 
-        // 2. SISTEM LOOPING: Biarkan AI menjalankan fungsi berkali-kali jika butuh
         let loopCount = 0;
+        let generatedQrisString = null;
+        let generatedInvoiceUrl = null;
+
         while (response.functionCalls && response.functionCalls.length > 0 && loopCount < 3) {
             loopCount++;
             const call = response.functionCalls[0];
@@ -249,14 +251,17 @@ ATURAN KERAS:
                 functionResult = await fetchPremifyProducts(args.searchKeyword || '');
             } else if (call.name === 'createPakasirInvoice') {
                 functionResult = await createPakasirInvoice(args.variantId, args.productName, args.variantName, args.finalPrice, senderWhatsapp);
+                
+                // TANGKAP QR STRING DARI HASIL FUNCTION
+                if (functionResult.sukses && functionResult.qris_string) {
+                    generatedQrisString = functionResult.qris_string;
+                    generatedInvoiceUrl = functionResult.invoice_url;
+                }
             }
 
-            // Simpan jejak AI memanggil alat ke memori
             chatHistory.push(response.candidates[0].content);
-            // Simpan hasil alat tersebut ke memori agar AI bisa membacanya
             chatHistory.push({ role: 'user', parts: [{ functionResponse: { name: call.name, response: { result: functionResult } } }] });
 
-            // Minta AI merespons lagi setelah melihat hasil alatnya
             response = await ai.models.generateContent({
                 model: 'gemini-2.5-flash',
                 contents: chatHistory,
@@ -265,14 +270,18 @@ ATURAN KERAS:
         }
 
         const finalReply = response.text || "Sebentar ya Kak, tagihannya sedang disiapkan...";
-        
-        // Simpan jawaban akhir AI ke dalam memori agar nyambung untuk chat berikutnya!
         chatHistory.push({ role: 'model', parts: [{ text: finalReply }] });
 
-        return finalReply;
+        // KITA RETURN OBJECT BUKAN STRING BIASA AGAR BISA KIRIM GAMBAR
+        return { 
+            text: finalReply, 
+            qrisString: generatedQrisString,
+            invoiceUrl: generatedInvoiceUrl
+        };
+
     } catch (error) { 
         console.error("🔴 GEMINI CRASH DETAIL:", error?.message || error);
-        return `Duh maaf Kak ${senderName}, sistemku agak error dikit nih. Boleh diulang? 🙏`; 
+        return { text: `Duh maaf Kak ${senderName}, sistemku agak error dikit nih. Boleh diulang? 🙏` }; 
     }
 }
 
@@ -390,10 +399,37 @@ function initBaileysV7() {
 
                     if (isAiActive) {
                         await sock.sendPresenceUpdate('composing', senderJid);
-                        const aiReply = await getGeminiResponse(bodyMessage, senderName, storeName, cleanSenderNumber);
+                        const aiReplyObj = await getGeminiResponse(bodyMessage, senderName, storeName, cleanSenderNumber);
+                        
                         await delay(750); 
                         await sock.sendPresenceUpdate('paused', senderJid);
-                        await sock.sendMessage(senderJid, { text: aiReply }, { quoted: msg });
+                        
+                        // 1. Kirim pesan Teks utama dari AI
+                        await sock.sendMessage(senderJid, { text: aiReplyObj.text }, { quoted: msg });
+
+                        // 2. Jika AI menghasilkan Invoice QRIS, convert string QR menjadi Gambar dan kirim
+                        if (aiReplyObj.qrisString) {
+                            try {
+                                // Convert raw string menjadi Buffer Image
+                                const qrBuffer = await QRCode.toBuffer(aiReplyObj.qrisString, { 
+                                    scale: 8, 
+                                    margin: 2, 
+                                    color: { dark: '#000000', light: '#ffffff' } 
+                                });
+                                
+                                await delay(1000); // Jeda biar ga dikira spam bot
+
+                                // Kirim Gambar ke WhatsApp Pelanggan
+                                await sock.sendMessage(senderJid, { 
+                                    image: qrBuffer, 
+                                    caption: `✅ *QRIS SIAP DIBAYAR!*\n\nSilakan scan kode QR di atas menggunakan aplikasi M-Banking atau E-Wallet (Dana, OVO, Gopay, dll).\n\n_Pesanan Kakak akan langsung otomatis diproses sedetik setelah pembayaran berhasil. ⚡_` 
+                                });
+                            } catch (qrError) {
+                                console.error("Gagal Render Gambar QR Code:", qrError);
+                                // Fallback jika library gagal menggambar QR, berikan link bayarnya saja
+                                await sock.sendMessage(senderJid, { text: `_Maaf Kak, bot gagal memuat gambar QRIS. Sebagai alternatif, Kakak bisa bayar lewat link ini:_ ${aiReplyObj.invoiceUrl}`});
+                            }
+                        }
                     }
                 }
             }
