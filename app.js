@@ -61,11 +61,17 @@ async function checkPremifyBalance() {
 }
 
 async function fetchPremifyProducts(searchKeyword = '') {
+    console.log(`\n[🔍 DEBUG API] AI mencoba mencari produk: "${searchKeyword}"`);
+    console.log(`[🔑 DEBUG API] Cek API Key: ${process.env.PREMIFY_API_KEY ? 'ADA (Valid format string)' : 'KOSONG / UNDEFINED!'}`);
+
     try {
         const response = await axios.post(`${PREMIFY_BASE_URL}/products`, {
             api_key: process.env.PREMIFY_API_KEY
         }, { headers: PREMIFY_HEADERS });
         
+        // Tampilkan response asli dari server di terminal
+        console.log(`[🟢 DEBUG API] Response Server (Status ${response.status}):`, JSON.stringify(response.data, null, 2));
+
         if (response.data && response.data.success === true) {
             const products = response.data.data || [];
             const flattenedVariants = [];
@@ -90,17 +96,27 @@ async function fetchPremifyProducts(searchKeyword = '') {
             });
 
             if (flattenedVariants.length === 0) {
+                console.log(`[🟡 DEBUG API] Produk ditemukan di database, tapi tidak ada yang cocok dengan kata kunci "${searchKeyword}"`);
                 return [{ 
                     status: "KOSONG", 
                     keterangan: `Produk dengan kata kunci '${searchKeyword}' tidak ditemukan atau sedang habis di supplier.` 
                 }];
             }
 
+            console.log(`[🟢 DEBUG API] Berhasil mengirim ${flattenedVariants.length} varian ke otak AI.`);
             return flattenedVariants.slice(0, 15);
         }
-        return [{ status: "ERROR", keterangan: "Gagal memuat produk dari server." }];
+        
+        console.log(`[🔴 DEBUG API] Request sukses masuk server, tapi server menolak:`, response.data);
+        return [{ status: "ERROR", keterangan: `Gagal memuat produk. Pesan Server: ${response.data?.message || 'Unknown'}` }];
+
     } catch (error) { 
-        return [{ status: "ERROR", keterangan: "Gangguan jaringan saat cek produk." }]; 
+        // INI ADALAH PENYEBAB UTAMANYA. Kita print error aslinya ke terminal.
+        console.error(`\n[❌ FATAL ERROR API] Gagal Hit Endpoint Premify!`);
+        console.error(`Status Code:`, error?.response?.status || 'Tidak ada (Masalah koneksi)');
+        console.error(`Pesan Error Server:`, error?.response?.data || error.message);
+        
+        return [{ status: "ERROR", keterangan: `Beri tahu pelanggan: Sistem error dengan kode ${error?.response?.status || 'Network'}. Silakan lapor Owner.` }]; 
     }
 }
 
